@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User, Phone, Video, Check, Loader2, ChevronLeft } from 'lucide-react';
+import { User, Phone, Video, Check, Loader2, ChevronLeft, Globe } from 'lucide-react';
 import { registerCustomer } from '../services/api';
 import { Link } from 'react-router-dom';
 
@@ -84,16 +84,19 @@ const MobileRegister: React.FC = () => {
 
               <div className="relative group">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <Phone className="h-5 w-5 text-gray-400 group-focus-within:text-blue-500 transition-colors" />
+                  <Globe className="h-5 w-5 text-gray-400 group-focus-within:text-blue-500 transition-colors" />
                 </div>
                 <input
                   type="tel"
                   required
                   className="block w-full pl-12 pr-4 py-4 bg-white border-0 ring-1 ring-gray-200 rounded-2xl text-lg placeholder:text-gray-400 focus:ring-2 focus:ring-blue-500/50 focus:outline-none shadow-sm transition-all"
-                  placeholder="WhatsApp Number"
+                  placeholder="Phone (e.g. 1555000000)"
                   value={formData.phone}
                   onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 />
+                <p className="mt-1.5 text-xs text-blue-600 px-2 text-right font-medium">
+                  * Must include Country Code (No +)
+                </p>
               </div>
 
               <div className="relative group">
@@ -108,7 +111,7 @@ const MobileRegister: React.FC = () => {
                   value={formData.videoName}
                   onChange={(e) => setFormData({ ...formData, videoName: e.target.value })}
                 />
-                <p className="mt-2 text-xs text-gray-400 px-2 text-right">
+                <p className="mt-1.5 text-xs text-gray-400 px-2 text-right">
                   Matches file name exactly
                 </p>
               </div>

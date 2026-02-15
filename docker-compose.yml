@@ -47,6 +47,7 @@ services:
     image: devlikeapro/waha:latest
     restart: always
     container_name: waha
+    shm_size: '2gb' # IMPORTANT for large media handling
     environment:
       - WHATSAPP_DEFAULT_ENGINE=WEBJS
       - WAHA_PRINT_QR=true
@@ -55,6 +56,7 @@ services:
       - WAHA_DASHBOARD_USERNAME=admin
       - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASS}
       - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_HTTP_MAX_BODY_SIZE=100mb
     volumes:
       - waha_data:/app/.waha
     ports:

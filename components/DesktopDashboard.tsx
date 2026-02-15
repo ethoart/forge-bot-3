@@ -1,14 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { UploadCloud, Clock, CheckCircle, RefreshCw, FileVideo, Loader2, Search, ArrowLeft, Filter, Layers, AlertTriangle } from 'lucide-react';
+import { UploadCloud, Clock, CheckCircle, RefreshCw, FileVideo, Loader2, Search, ArrowLeft, Filter, Layers, AlertTriangle, AlertCircle } from 'lucide-react';
 import { CustomerRequest } from '../types';
-import { getPendingRequests, uploadDocument } from '../services/api';
+import { getPendingRequests, getFailedRequests, uploadDocument } from '../services/api';
 import { formatDistanceToNow } from 'date-fns';
 import { MOTIVATIONAL_QUOTES } from '../constants';
 import { Link } from 'react-router-dom';
 
+type TabView = 'queue' | 'issues';
+
 const DesktopDashboard: React.FC = () => {
   const [requests, setRequests] = useState<CustomerRequest[]>([]);
+  const [failedRequests, setFailedRequests] = useState<CustomerRequest[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabView>('queue');
   
   // Batch Upload States
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
@@ -23,14 +27,19 @@ const DesktopDashboard: React.FC = () => {
     if (isProcessingBatch) return;
 
     setIsLoading(true);
-    const data = await getPendingRequests();
-    setRequests(data);
+    const pendingData = await getPendingRequests();
+    setRequests(pendingData);
+    
+    // Also fetch failed to show issues
+    const failedData = await getFailedRequests();
+    setFailedRequests(failedData);
+    
     setIsLoading(false);
   }, [isProcessingBatch]);
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 10000);
+    const interval = setInterval(fetchData, 8000);
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -53,8 +62,6 @@ const DesktopDashboard: React.FC = () => {
       unmatched: 0
     });
 
-    // We maintain a set of Request IDs used in this batch to prevent 
-    // sending 2 duplicate files to the same customer in one go.
     const usedRequestIds = new Set<string>();
     
     let successes = 0;
@@ -70,14 +77,9 @@ const DesktopDashboard: React.FC = () => {
       const nameWithoutExt = rawFileName.substring(0, rawFileName.lastIndexOf('.')) || rawFileName;
       const normFileName = normalize(nameWithoutExt);
 
-      // Find the OLDEST pending request that matches this filename
       const match = requests.find(r => {
         if (usedRequestIds.has(r.id) || r.status !== 'pending') return false;
-        
         const normVideoName = normalize(r.videoName);
-        
-        // Match if one contains the other (e.g. "video1" matches "video1_final")
-        // Or exact match of normalized strings
         return normFileName.includes(normVideoName) || normVideoName.includes(normFileName);
       });
 
@@ -98,29 +100,26 @@ const DesktopDashboard: React.FC = () => {
       }
     }
 
-    // Batch Complete
-    const message = `Sent: ${successes} | Unmatched: ${unmatched} | Failed: ${failed}`;
+    const message = `Queued: ${successes} | Unmatched: ${unmatched} | Errors: ${failed}`;
     const type = (failed > 0 || unmatched > 0) ? 'warning' : 'success';
     
     setLastBatchReport({ message, type });
     setIsProcessingBatch(false);
     setMotivation(MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)]);
     
-    // Refresh list immediately to show completed items gone
-    const newData = await getPendingRequests();
-    setRequests(newData);
+    // Refresh list immediately
+    fetchData();
 
     // Reset input
     e.target.value = '';
     
-    // Clear report after 10 seconds
     setTimeout(() => {
       setLastBatchReport(null);
       setBatchProgress({ current: 0, total: 0, successes: 0, failed: 0, unmatched: 0 });
     }, 10000);
   };
 
-  const filteredRequests = requests.filter(r => 
+  const filteredRequests = (activeTab === 'queue' ? requests : failedRequests).filter(r => 
     r.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
     r.videoName.toLowerCase().includes(searchTerm.toLowerCase())
   );
@@ -128,16 +127,29 @@ const DesktopDashboard: React.FC = () => {
   return (
     <div className="flex h-screen bg-white font-sans text-slate-900 overflow-hidden">
       
-      {/* SIDEBAR - Minimal & Solid */}
+      {/* SIDEBAR */}
       <div className="w-80 bg-slate-50 border-r border-slate-200 flex flex-col">
         <div className="h-16 flex items-center px-6 border-b border-slate-200 bg-white">
             <Link to="/" className="mr-3 p-1.5 rounded-md hover:bg-slate-100 text-slate-500 transition-colors">
                <ArrowLeft className="w-5 h-5" />
             </Link>
-            <span className="font-bold text-lg tracking-tight">Queue</span>
-            <div className="ml-auto bg-slate-100 text-slate-600 text-xs font-bold px-2 py-1 rounded-md">
-              {requests.length}
-            </div>
+            <span className="font-bold text-lg tracking-tight">Dashboard</span>
+        </div>
+
+        {/* TABS */}
+        <div className="flex p-2 gap-1 bg-slate-50 border-b border-slate-200">
+          <button 
+            onClick={() => setActiveTab('queue')}
+            className={`flex-1 py-1.5 text-xs font-semibold rounded-md flex items-center justify-center gap-2 transition-all ${activeTab === 'queue' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:bg-slate-100'}`}
+          >
+            Queue <span className="bg-slate-100 px-1.5 rounded-full text-[10px] text-slate-600 border border-slate-200">{requests.length}</span>
+          </button>
+          <button 
+            onClick={() => setActiveTab('issues')}
+            className={`flex-1 py-1.5 text-xs font-semibold rounded-md flex items-center justify-center gap-2 transition-all ${activeTab === 'issues' ? 'bg-red-50 shadow-sm text-red-600 border border-red-100' : 'text-slate-500 hover:bg-slate-100'}`}
+          >
+            Issues <span className={`px-1.5 rounded-full text-[10px] border ${failedRequests.length > 0 ? 'bg-red-100 text-red-700 border-red-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>{failedRequests.length}</span>
+          </button>
         </div>
 
         <div className="p-4 flex flex-col flex-1 overflow-hidden">
@@ -145,7 +157,7 @@ const DesktopDashboard: React.FC = () => {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input 
               type="text" 
-              placeholder="Search request..." 
+              placeholder="Search..." 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent focus:outline-none transition-shadow shadow-sm"
@@ -153,27 +165,37 @@ const DesktopDashboard: React.FC = () => {
           </div>
           
           <div className="space-y-2 overflow-y-auto flex-1 custom-scrollbar pr-1">
-             {isLoading && requests.length === 0 && (
+             {isLoading && filteredRequests.length === 0 && (
                 <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-slate-400"/></div>
              )}
              
              {!isLoading && filteredRequests.length === 0 ? (
                 <div className="text-center py-12 text-slate-400">
                   <Filter className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">No requests found</p>
+                  <p className="text-sm">No items found</p>
                 </div>
              ) : (
                 filteredRequests.map((req) => (
-                  <div key={req.id} className="group p-4 rounded-xl bg-white border border-slate-100 shadow-sm hover:shadow-md hover:border-blue-200 transition-all cursor-default select-none relative overflow-hidden">
-                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500 rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                  <div key={req.id} className={`group p-4 rounded-xl bg-white border shadow-sm hover:shadow-md transition-all cursor-default select-none relative overflow-hidden ${activeTab === 'issues' ? 'border-red-100 hover:border-red-200' : 'border-slate-100 hover:border-blue-200'}`}>
+                    <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity ${activeTab === 'issues' ? 'bg-red-500' : 'bg-blue-500'}`}></div>
+                    
                     <div className="flex justify-between items-start mb-1">
                       <span className="font-semibold text-slate-800 text-sm truncate pr-2">{req.customerName}</span>
-                      <span className="text-[10px] text-slate-400 whitespace-nowrap">{formatDistanceToNow(new Date(req.requestedAt))}</span>
+                      <span className="text-[10px] text-slate-400 whitespace-nowrap">{req.requestedAt ? formatDistanceToNow(new Date(req.requestedAt)) : 'Unknown'}</span>
                     </div>
+                    
                     <div className="flex items-center text-xs text-slate-500 mt-1">
-                      <FileVideo className="w-3 h-3 mr-1.5 text-blue-500" />
+                      <FileVideo className={`w-3 h-3 mr-1.5 ${activeTab === 'issues' ? 'text-red-400' : 'text-blue-500'}`} />
                       <span className="font-mono bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 truncate max-w-[180px]">{req.videoName}</span>
                     </div>
+
+                    {/* ERROR MESSAGE FOR ISSUES TAB */}
+                    {activeTab === 'issues' && (req as any).error && (
+                      <div className="mt-2 pt-2 border-t border-red-50 flex items-start gap-1.5 text-[11px] text-red-600 bg-red-50/50 p-1.5 rounded">
+                        <AlertCircle className="w-3 h-3 flex-shrink-0 mt-0.5" />
+                        <span className="break-words leading-tight">{(req as any).error}</span>
+                      </div>
+                    )}
                   </div>
                 ))
              )}
@@ -198,8 +220,6 @@ const DesktopDashboard: React.FC = () => {
            </h1>
            
            <div className="flex items-center space-x-4">
-              <div className="text-sm text-slate-500 italic hidden md:block">"{motivation}"</div>
-              <div className="h-4 w-px bg-slate-200 hidden md:block"></div>
               <div className="flex items-center gap-2 px-3 py-1 bg-green-50 text-green-700 rounded-full text-xs font-bold border border-green-100">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
@@ -212,12 +232,9 @@ const DesktopDashboard: React.FC = () => {
 
         {/* Upload Zone */}
         <main className="flex-1 p-8 flex flex-col items-center justify-center bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:20px_20px]">
-           
            <div className="w-full max-w-3xl">
               <div className="relative group">
-                {/* Decorative shadow */}
                 <div className="absolute -inset-1 bg-gradient-to-r from-blue-100 to-purple-100 rounded-[2rem] blur opacity-25 group-hover:opacity-75 transition duration-1000 group-hover:duration-200"></div>
-                
                 <div className={`relative aspect-[2/1] bg-white rounded-[1.8rem] border-2 border-dashed ${isProcessingBatch ? 'border-blue-400 bg-blue-50/30' : 'border-slate-200 hover:border-blue-500 hover:bg-blue-50/10'} transition-all flex flex-col items-center justify-center cursor-pointer overflow-hidden shadow-xl shadow-slate-200/50`}>
                   <input 
                     type="file" 
@@ -233,67 +250,30 @@ const DesktopDashboard: React.FC = () => {
                        <Loader2 className="w-16 h-16 text-blue-500 animate-spin mb-4" />
                        <h3 className="text-2xl font-bold text-slate-800 mb-2">Processing Batch...</h3>
                        <div className="w-64 h-2 bg-slate-100 rounded-full overflow-hidden mt-2">
-                          <div 
-                            className="h-full bg-blue-500 transition-all duration-300 ease-out"
-                            style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
-                          />
+                          <div className="h-full bg-blue-500 transition-all duration-300 ease-out" style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }} />
                        </div>
-                       <p className="text-slate-500 mt-3 font-mono text-sm">
-                         {batchProgress.current} / {batchProgress.total} Files
-                       </p>
-                       <p className="text-xs text-green-600 mt-1 font-bold">
-                         {batchProgress.successes} Sent
-                       </p>
+                       <p className="text-slate-500 mt-3 font-mono text-sm">{batchProgress.current} / {batchProgress.total} Files</p>
                     </div>
                   ) : lastBatchReport ? (
                     <div className="flex flex-col items-center animate-in fade-in zoom-in-95 duration-300">
                        <div className={`p-6 rounded-full mb-4 ${lastBatchReport.type === 'success' ? 'bg-green-50' : 'bg-orange-50'}`}>
-                         {lastBatchReport.type === 'success' ? (
-                           <CheckCircle className="w-12 h-12 text-green-500" />
-                         ) : (
-                           <AlertTriangle className="w-12 h-12 text-orange-500" />
-                         )}
+                         {lastBatchReport.type === 'success' ? <CheckCircle className="w-12 h-12 text-green-500" /> : <AlertTriangle className="w-12 h-12 text-orange-500" />}
                        </div>
                        <h3 className="text-xl font-bold text-slate-800 mb-2">{lastBatchReport.message}</h3>
-                       <p className="text-slate-400 text-sm">
-                         {lastBatchReport.type === 'success' ? 'All good!' : 'Check filenames and try again.'}
-                       </p>
+                       <p className="text-slate-400 text-sm">{lastBatchReport.type === 'success' ? 'All files queued.' : 'Check Issues tab for errors.'}</p>
                     </div>
                   ) : (
                     <>
                       <div className="bg-slate-50 p-6 rounded-full mb-6 group-hover:scale-110 group-hover:bg-blue-100 transition-all duration-300">
                          <UploadCloud className="w-12 h-12 text-slate-400 group-hover:text-blue-600 transition-colors" />
                       </div>
-                      
                       <h3 className="text-2xl font-bold text-slate-800 mb-2">Drag & Drop Videos</h3>
                       <p className="text-slate-500 text-sm max-w-sm text-center px-4 leading-relaxed">
-                        <span className="font-semibold text-blue-600">Bulk Upload Supported</span>. 
-                        Files match automatically (e.g. "video1.mp4" → "Video 1").
+                        Files are matched automatically. <br/>Check <b>Issues</b> tab if delivery fails.
                       </p>
                     </>
                   )}
                 </div>
-              </div>
-
-              <div className="mt-8 grid grid-cols-2 gap-4">
-                 <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-                    <div>
-                      <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1">Queue Size</p>
-                      <p className="text-2xl font-bold text-slate-800">{requests.length}</p>
-                    </div>
-                    <div className="h-10 w-10 bg-blue-50 rounded-full flex items-center justify-center">
-                       <Clock className="w-5 h-5 text-blue-500" />
-                    </div>
-                 </div>
-                 <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-                    <div>
-                      <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mb-1">Batch Mode</p>
-                      <p className="text-2xl font-bold text-green-600">Ready</p>
-                    </div>
-                    <div className="h-10 w-10 bg-green-50 rounded-full flex items-center justify-center">
-                       <Layers className="w-5 h-5 text-green-500" />
-                    </div>
-                 </div>
               </div>
            </div>
         </main>

@@ -4,7 +4,7 @@ import random
 import base64
 import logging
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 # --- CONFIG ---
-# Connection string for Docker: mongo service on port 27017
 MONGO_USER = os.getenv("MONGO_USER", "admin")
 MONGO_PASS = os.getenv("MONGO_PASS", "secret123")
 MONGO_URI = f"mongodb://{MONGO_USER}:{MONGO_PASS}@mongo:27017"
@@ -31,6 +30,7 @@ WAHA_SESSION = os.getenv("WAHA_WORKER_ID", "default")
 
 logger.info("🚀 Starting Backend...")
 logger.info(f"🔌 Connecting to Mongo at: mongo:27017 (User: {MONGO_USER})")
+logger.info(f"📱 Target WAHA Session: {WAHA_SESSION}")
 
 # --- CORS ---
 app.add_middleware(
@@ -64,33 +64,60 @@ def pydantic_encoder(item):
         "phoneNumber": item["phoneNumber"],
         "videoName": item["videoName"],
         "status": item.get("status", "pending"),
+        "error": item.get("error", None),
         "requestedAt": item.get("requestedAt")
     }
 
 def format_phone_to_chat_id(phone: str) -> str:
-    """Formats a phone number to WAHA chat ID (e.g., 12125551234@c.us)"""
-    # Remove all non-numeric characters
+    """
+    Formats a phone number to WAHA chat ID.
+    IMPORTANT: Removes '+' and spaces. 
+    Assumes user provided Country Code (e.g. 15551234567 -> 15551234567@c.us)
+    """
     clean_number = "".join(filter(str.isdigit, phone))
+    # Heuristic: If number starts with '00', strip it (001 -> 1)
+    if clean_number.startswith("00"):
+        clean_number = clean_number[2:]
+        
     return f"{clean_number}@c.us"
+
+async def is_waha_ready():
+    """Checks if the configured WAHA session is in WORKING state"""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as http_client:
+            # Check specific session status
+            url = f"{WAHA_API_URL}/api/sessions/{WAHA_SESSION}"
+            resp = await http_client.get(url)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                status = data.get("status", "UNKNOWN")
+                if status == "WORKING":
+                    return True, "Ready"
+                return False, f"Session status is {status} (Not WORKING)"
+            elif resp.status_code == 404:
+                return False, f"Session '{WAHA_SESSION}' not found. Please scan QR code."
+            else:
+                return False, f"WAHA API Error: {resp.status_code}"
+    except Exception as e:
+        return False, f"Connection Error: {str(e)}"
 
 async def background_send_workflow(request_id: str, phone: str, name: str, video_name: str, file_content: bytes, mime_type: str, filename: str):
     """
-    Background Task:
-    1. Waits 5-15 seconds (Human simulation).
-    2. Sends document via WAHA.
-    3. Updates Status in MongoDB.
+    Background Task: Simulates human delay then sends document.
     """
     try:
         logger.info(f"[{request_id}] ⏳ Workflow started. Simulating delay...")
         
         # 1. Human Delay
-        delay = random.randint(5, 15)
+        delay = random.randint(5, 10)
         await asyncio.sleep(delay)
         
-        logger.info(f"[{request_id}] 🚀 Sending to WAHA now...")
-
         # 2. Prepare WAHA Payload
         chat_id = format_phone_to_chat_id(phone)
+        file_size_mb = len(file_content) / (1024 * 1024)
+        logger.info(f"[{request_id}] 🚀 Sending '{filename}' ({file_size_mb:.2f} MB) to {chat_id} (Session: {WAHA_SESSION})...")
+
         b64_data = base64.b64encode(file_content).decode('utf-8')
         data_uri = f"data:{mime_type};base64,{b64_data}"
 
@@ -110,25 +137,27 @@ async def background_send_workflow(request_id: str, phone: str, name: str, video
             "X-Api-Key": WAHA_API_KEY
         }
 
-        # 3. Send Request
-        async with httpx.AsyncClient(timeout=60.0) as http_client:
+        # 3. Send Request (Increased timeout for videos)
+        async with httpx.AsyncClient(timeout=180.0) as http_client:
             response = await http_client.post(f"{WAHA_API_URL}/api/sendFile", json=payload, headers=headers)
             
             if response.status_code in [200, 201]:
-                logger.info(f"[{request_id}] ✅ WAHA Success: {response.json()}")
+                logger.info(f"[{request_id}] ✅ WAHA Sent Successfully: {response.json()}")
                 await customers.update_one(
                     {"_id": ObjectId(request_id)},
                     {"$set": {"status": "completed", "completedAt": datetime.utcnow().isoformat()}}
                 )
             else:
-                logger.error(f"[{request_id}] ❌ WAHA Error ({response.status_code}): {response.text}")
+                error_msg = response.text
+                if len(error_msg) > 200: error_msg = error_msg[:200] + "..."
+                logger.error(f"[{request_id}] ❌ WAHA Rejected ({response.status_code}): {error_msg}")
                 await customers.update_one(
                     {"_id": ObjectId(request_id)},
-                    {"$set": {"status": "failed", "error": response.text}}
+                    {"$set": {"status": "failed", "error": f"WAHA {response.status_code}: {error_msg}"}}
                 )
 
     except Exception as e:
-        logger.error(f"[{request_id}] 💥 Exception: {str(e)}")
+        logger.error(f"[{request_id}] 💥 Exception during send: {str(e)}")
         await customers.update_one(
             {"_id": ObjectId(request_id)},
             {"$set": {"status": "failed", "error": str(e)}}
@@ -154,9 +183,14 @@ async def register_customer(request: CustomerCreate):
 
 @app.get("/api/get-pending")
 async def get_pending():
-    # Get oldest pending first
     pending_docs = await customers.find({"status": "pending"}).sort("requestedAt", 1).limit(100).to_list(length=100)
     return [pydantic_encoder(doc) for doc in pending_docs]
+
+@app.get("/api/get-failed")
+async def get_failed():
+    # Return last 50 failed items
+    failed_docs = await customers.find({"status": "failed"}).sort("requestedAt", -1).limit(50).to_list(length=50)
+    return [pydantic_encoder(doc) for doc in failed_docs]
 
 @app.post("/api/upload-document")
 async def upload_document(
@@ -166,6 +200,12 @@ async def upload_document(
     phoneNumber: str = Form(...),
     videoName: str = Form(...)
 ):
+    # 0. Pre-flight Check: Is WhatsApp Ready?
+    is_ready, reason = await is_waha_ready()
+    if not is_ready:
+        logger.warning(f"⚠️ Upload rejected because WAHA is not ready: {reason}")
+        raise HTTPException(status_code=503, detail=f"WhatsApp Not Ready: {reason}")
+
     # 1. Validate ID
     try:
         req_oid = ObjectId(requestId)
@@ -175,7 +215,7 @@ async def upload_document(
     # 2. Read File
     content = await file.read()
     
-    # 3. Find Customer Name (Optional, for personalization)
+    # 3. Find Customer Name
     customer = await customers.find_one({"_id": req_oid})
     customer_name = customer['customerName'] if customer else "Customer"
 
