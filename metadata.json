@@ -1,0 +1,5 @@
+{
+  "name": "WhatsDoc Flow",
+  "description": "A dual-interface platform for customer registration and automated WhatsApp document delivery via n8n integration.",
+  "requestFramePermissions": []
+}

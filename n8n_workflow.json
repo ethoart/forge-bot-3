@@ -1,0 +1,212 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "register-customer",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook Register",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "pending"
+            },
+            {
+              "name": "requestedAt",
+              "value": "={{new Date().toISOString()}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set Defaults",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "collection": "customers",
+        "options": {}
+      },
+      "name": "Mongo Insert",
+      "type": "n8n-nodes-base.mongoDb",
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true, \"id\": \"{{$json._id}}\" }",
+        "options": {}
+      },
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [600, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "upload-document",
+        "responseMode": "onReceived",
+        "options": {
+          "binaryData": true
+        }
+      },
+      "name": "Webhook Upload",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [100, 500]
+    },
+    {
+      "parameters": {
+        "operation": "find",
+        "collection": "customers",
+        "query": "={ \"videoName\": { \"$regex\": \"^{{$json.body.videoName}}\", \"$options\": \"i\" }, \"status\": \"pending\" }"
+      },
+      "name": "Mongo Find Match",
+      "type": "n8n-nodes-base.mongoDb",
+      "position": [300, 500]
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * (15 - 5) + 5) }}",
+        "unit": "seconds"
+      },
+      "name": "Human Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [500, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://waha:3000/api/sendFile",
+        "sendBody": true,
+        "contentType": "json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Api-Key",
+              "value": "secret123"
+            }
+          ]
+        },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chatId",
+              "value": "={{$json.phone.replace('+', '').replace('-', '')}}@c.us"
+            },
+            {
+              "name": "caption",
+              "value": "Hi {{$json.name}}! Here is the video document you requested: {{$json.videoName}}. Thanks for visiting us!"
+            },
+            {
+              "name": "session",
+              "value": "default"
+            },
+            {
+              "name": "file",
+              "value": "={{ {\n  \"mimetype\": $binary.file.mime,\n  \"filename\": $binary.file.fileName,\n  \"data\": \"data:\" + $binary.file.mime + \";base64,\" + $binary.file.data\n} }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "WAHA Local API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [700, 500]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "collection": "customers",
+        "updateKey": "_id",
+        "updateFields": "status",
+        "value": "completed"
+      },
+      "name": "Mongo Update Status",
+      "type": "n8n-nodes-base.mongoDb",
+      "position": [900, 500]
+    },
+    {
+       "parameters": {
+          "httpMethod": "GET",
+          "path": "get-pending",
+          "responseMode": "responseNode",
+          "options": {}
+       },
+       "name": "Webhook Get Pending",
+       "type": "n8n-nodes-base.webhook",
+       "typeVersion": 1,
+       "position": [100, 700]
+    },
+    {
+       "parameters": {
+          "operation": "find",
+          "collection": "customers",
+          "query": "{ \"status\": \"pending\" }",
+          "options": {
+             "limit": 50,
+             "sort": { "requestedAt": 1 }
+          }
+       },
+       "name": "Get Pending",
+       "type": "n8n-nodes-base.mongoDb",
+       "position": [300, 700]
+    },
+    {
+       "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ $json }}",
+          "options": {}
+       },
+       "name": "Respond with Data",
+       "type": "n8n-nodes-base.respondToWebhook",
+       "typeVersion": 1,
+       "position": [500, 700]
+    }
+  ],
+  "connections": {
+    "Webhook Register": {
+      "main": [[{"node": "Set Defaults", "type": "main", "index": 0}]]
+    },
+    "Set Defaults": {
+      "main": [[{"node": "Mongo Insert", "type": "main", "index": 0}]]
+    },
+    "Mongo Insert": {
+      "main": [[{"node": "Respond Success", "type": "main", "index": 0}]]
+    },
+    "Webhook Upload": {
+      "main": [[{"node": "Mongo Find Match", "type": "main", "index": 0}]]
+    },
+    "Mongo Find Match": {
+      "main": [[{"node": "Human Delay", "type": "main", "index": 0}]]
+    },
+    "Human Delay": {
+      "main": [[{"node": "WAHA Local API", "type": "main", "index": 0}]]
+    },
+    "WAHA Local API": {
+      "main": [[{"node": "Mongo Update Status", "type": "main", "index": 0}]]
+    },
+    "Webhook Get Pending": {
+       "main": [[{"node": "Get Pending", "type": "main", "index": 0}]]
+    },
+    "Get Pending": {
+       "main": [[{"node": "Respond with Data", "type": "main", "index": 0}]]
+    }
+  }
+}
