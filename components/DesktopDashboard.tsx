@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { UploadCloud, Clock, CheckCircle, RefreshCw, FileVideo, Loader2, Search, ArrowLeft, Filter, Layers, AlertTriangle, AlertCircle } from 'lucide-react';
+import { UploadCloud, Clock, CheckCircle, RefreshCw, FileVideo, Loader2, Search, ArrowLeft, Filter, Layers, AlertTriangle, AlertCircle, HardDrive, Trash2, Send } from 'lucide-react';
 import { CustomerRequest } from '../types';
-import { getPendingRequests, getFailedRequests, uploadDocument } from '../services/api';
+import { getPendingRequests, getFailedRequests, uploadDocument, getServerFiles, deleteServerFile, retryServerFile, ServerFile } from '../services/api';
 import { formatDistanceToNow } from 'date-fns';
 import { MOTIVATIONAL_QUOTES } from '../constants';
 import { Link } from 'react-router-dom';
 
-type TabView = 'queue' | 'issues';
+type TabView = 'queue' | 'issues' | 'storage';
 
 const DesktopDashboard: React.FC = () => {
   const [requests, setRequests] = useState<CustomerRequest[]>([]);
   const [failedRequests, setFailedRequests] = useState<CustomerRequest[]>([]);
+  const [serverFiles, setServerFiles] = useState<ServerFile[]>([]);
+  
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabView>('queue');
   
@@ -33,6 +35,10 @@ const DesktopDashboard: React.FC = () => {
     // Also fetch failed to show issues
     const failedData = await getFailedRequests();
     setFailedRequests(failedData);
+
+    // Fetch storage
+    const files = await getServerFiles();
+    setServerFiles(files);
     
     setIsLoading(false);
   }, [isProcessingBatch]);
@@ -119,6 +125,23 @@ const DesktopDashboard: React.FC = () => {
     }, 10000);
   };
 
+  const handleRetryFile = async (filename: string) => {
+    if(!confirm(`Retry sending ${filename}?`)) return;
+    const res = await retryServerFile(filename);
+    if(res.success) {
+      alert("Queued for retry: " + res.message);
+      fetchData();
+    } else {
+      alert("Failed to retry: " + res.message);
+    }
+  };
+
+  const handleDeleteFile = async (filename: string) => {
+    if(!confirm(`Permanently delete ${filename} from server?`)) return;
+    const success = await deleteServerFile(filename);
+    if(success) fetchData();
+  };
+
   const filteredRequests = (activeTab === 'queue' ? requests : failedRequests).filter(r => 
     r.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
     r.videoName.toLowerCase().includes(searchTerm.toLowerCase())
@@ -150,9 +173,17 @@ const DesktopDashboard: React.FC = () => {
           >
             Issues <span className={`px-1.5 rounded-full text-[10px] border ${failedRequests.length > 0 ? 'bg-red-100 text-red-700 border-red-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>{failedRequests.length}</span>
           </button>
+          <button 
+            onClick={() => setActiveTab('storage')}
+            className={`flex-1 py-1.5 text-xs font-semibold rounded-md flex items-center justify-center gap-2 transition-all ${activeTab === 'storage' ? 'bg-indigo-50 shadow-sm text-indigo-600 border border-indigo-100' : 'text-slate-500 hover:bg-slate-100'}`}
+          >
+            Storage <span className="bg-slate-100 px-1.5 rounded-full text-[10px] text-slate-600 border border-slate-200">{serverFiles.length}</span>
+          </button>
         </div>
 
         <div className="p-4 flex flex-col flex-1 overflow-hidden">
+          
+          {/* SEARCH (Hidden for storage tab for simplicity, or shared) */}
           <div className="relative mb-6">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input 
@@ -165,39 +196,67 @@ const DesktopDashboard: React.FC = () => {
           </div>
           
           <div className="space-y-2 overflow-y-auto flex-1 custom-scrollbar pr-1">
-             {isLoading && filteredRequests.length === 0 && (
-                <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-slate-400"/></div>
-             )}
-             
-             {!isLoading && filteredRequests.length === 0 ? (
-                <div className="text-center py-12 text-slate-400">
-                  <Filter className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">No items found</p>
-                </div>
-             ) : (
-                filteredRequests.map((req) => (
-                  <div key={req.id} className={`group p-4 rounded-xl bg-white border shadow-sm hover:shadow-md transition-all cursor-default select-none relative overflow-hidden ${activeTab === 'issues' ? 'border-red-100 hover:border-red-200' : 'border-slate-100 hover:border-blue-200'}`}>
-                    <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity ${activeTab === 'issues' ? 'bg-red-500' : 'bg-blue-500'}`}></div>
-                    
-                    <div className="flex justify-between items-start mb-1">
-                      <span className="font-semibold text-slate-800 text-sm truncate pr-2">{req.customerName}</span>
-                      <span className="text-[10px] text-slate-400 whitespace-nowrap">{req.requestedAt ? formatDistanceToNow(new Date(req.requestedAt)) : 'Unknown'}</span>
+             {/* --- STORAGE TAB --- */}
+             {activeTab === 'storage' ? (
+                 serverFiles.length === 0 ? (
+                    <div className="text-center py-12 text-slate-400">
+                      <HardDrive className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">Storage Empty</p>
+                      <p className="text-xs">Files are deleted after sending.</p>
                     </div>
-                    
-                    <div className="flex items-center text-xs text-slate-500 mt-1">
-                      <FileVideo className={`w-3 h-3 mr-1.5 ${activeTab === 'issues' ? 'text-red-400' : 'text-blue-500'}`} />
-                      <span className="font-mono bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 truncate max-w-[180px]">{req.videoName}</span>
-                    </div>
-
-                    {/* ERROR MESSAGE FOR ISSUES TAB */}
-                    {activeTab === 'issues' && (req as any).error && (
-                      <div className="mt-2 pt-2 border-t border-red-50 flex items-start gap-1.5 text-[11px] text-red-600 bg-red-50/50 p-1.5 rounded">
-                        <AlertCircle className="w-3 h-3 flex-shrink-0 mt-0.5" />
-                        <span className="break-words leading-tight">{(req as any).error}</span>
+                 ) : (
+                    serverFiles.map((file, idx) => (
+                      <div key={idx} className="p-3 rounded-xl bg-white border border-indigo-100 hover:shadow-md transition-all">
+                        <div className="flex justify-between items-start">
+                          <span className="font-semibold text-slate-700 text-xs truncate max-w-[150px]">{file.name}</span>
+                          <span className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 rounded">{file.size}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-1 mb-2">{new Date(file.created).toLocaleTimeString()}</div>
+                        <div className="flex gap-2">
+                          <button onClick={() => handleRetryFile(file.name)} className="flex-1 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center justify-center gap-1">
+                             <Send className="w-3 h-3" /> Retry
+                          </button>
+                          <button onClick={() => handleDeleteFile(file.name)} className="py-1.5 px-2.5 text-xs bg-red-50 text-red-500 rounded-lg hover:bg-red-100">
+                             <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       </div>
-                    )}
-                  </div>
-                ))
+                    ))
+                 )
+             ) : (
+             /* --- QUEUE / ISSUES TAB --- */
+                isLoading && filteredRequests.length === 0 ? (
+                    <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-slate-400"/></div>
+                ) : !isLoading && filteredRequests.length === 0 ? (
+                    <div className="text-center py-12 text-slate-400">
+                      <Filter className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">No items found</p>
+                    </div>
+                ) : (
+                    filteredRequests.map((req) => (
+                      <div key={req.id} className={`group p-4 rounded-xl bg-white border shadow-sm hover:shadow-md transition-all cursor-default select-none relative overflow-hidden ${activeTab === 'issues' ? 'border-red-100 hover:border-red-200' : 'border-slate-100 hover:border-blue-200'}`}>
+                        <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity ${activeTab === 'issues' ? 'bg-red-500' : 'bg-blue-500'}`}></div>
+                        
+                        <div className="flex justify-between items-start mb-1">
+                          <span className="font-semibold text-slate-800 text-sm truncate pr-2">{req.customerName}</span>
+                          <span className="text-[10px] text-slate-400 whitespace-nowrap">{req.requestedAt ? formatDistanceToNow(new Date(req.requestedAt)) : 'Unknown'}</span>
+                        </div>
+                        
+                        <div className="flex items-center text-xs text-slate-500 mt-1">
+                          <FileVideo className={`w-3 h-3 mr-1.5 ${activeTab === 'issues' ? 'text-red-400' : 'text-blue-500'}`} />
+                          <span className="font-mono bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 truncate max-w-[180px]">{req.videoName}</span>
+                        </div>
+
+                        {/* ERROR MESSAGE FOR ISSUES TAB */}
+                        {activeTab === 'issues' && (req as any).error && (
+                          <div className="mt-2 pt-2 border-t border-red-50 flex items-start gap-1.5 text-[11px] text-red-600 bg-red-50/50 p-1.5 rounded">
+                            <AlertCircle className="w-3 h-3 flex-shrink-0 mt-0.5" />
+                            <span className="break-words leading-tight">{(req as any).error}</span>
+                          </div>
+                        )}
+                      </div>
+                    ))
+                )
              )}
           </div>
         </div>

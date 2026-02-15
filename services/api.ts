@@ -4,6 +4,12 @@ import { CustomerRequest } from '../types';
 // Helper to simulate delay
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+export interface ServerFile {
+  name: string;
+  size: string;
+  created: string;
+}
+
 // --- API METHODS ---
 
 export const registerCustomer = async (
@@ -21,7 +27,10 @@ export const registerCustomer = async (
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, phone, videoName }),
       });
-      if (!response.ok) return false;
+      if (!response.ok) {
+        console.error("Register Error:", await response.text());
+        return false;
+      }
       return true;
     } catch (error) {
       console.error("Network Error", error);
@@ -71,10 +80,53 @@ export const uploadDocument = async (
       method: 'POST',
       body: formData, 
     });
-    if (!response.ok) return false;
+    
+    if (!response.ok) {
+      console.error("Upload Error:", response.status, await response.text());
+      return false;
+    }
     return true;
   } catch (error) {
     console.error("Upload Network Error", error);
     return false;
+  }
+};
+
+// --- STORAGE API ---
+
+export const getServerFiles = async (): Promise<ServerFile[]> => {
+  try {
+    const response = await fetch(`${APP_CONFIG.apiBaseUrl}/server-files`);
+    if (response.ok) return await response.json();
+    return [];
+  } catch (error) {
+    return [];
+  }
+};
+
+export const deleteServerFile = async (filename: string): Promise<boolean> => {
+  try {
+    const response = await fetch(`${APP_CONFIG.apiBaseUrl}/server-files/${filename}`, {
+      method: 'DELETE',
+    });
+    return response.ok;
+  } catch (error) {
+    return false;
+  }
+};
+
+export const retryServerFile = async (filename: string): Promise<{success: boolean, message?: string}> => {
+  const formData = new FormData();
+  formData.append('filename', filename);
+  try {
+    const response = await fetch(`${APP_CONFIG.apiBaseUrl}/retry-file`, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await response.json();
+    if (response.ok) return { success: true, message: data.message };
+    return { success: false, message: data.detail || "Failed" };
+  } catch (error) {
+    return { success: false, message: "Network error" };
   }
 };
