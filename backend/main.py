@@ -2,6 +2,7 @@ import os
 import asyncio
 import random
 import base64
+import logging
 from datetime import datetime
 from typing import List
 
@@ -11,6 +12,10 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel
 from bson import ObjectId
 import httpx
+
+# --- LOGGING SETUP ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -24,6 +29,9 @@ WAHA_API_URL = "http://waha:3000"
 WAHA_API_KEY = os.getenv("WAHA_API_KEY", "secret123")
 WAHA_SESSION = os.getenv("WAHA_WORKER_ID", "default")
 
+logger.info("🚀 Starting Backend...")
+logger.info(f"🔌 Connecting to Mongo at: mongo:27017 (User: {MONGO_USER})")
+
 # --- CORS ---
 app.add_middleware(
     CORSMiddleware,
@@ -33,9 +41,13 @@ app.add_middleware(
 )
 
 # --- DATABASE ---
-client = AsyncIOMotorClient(MONGO_URI)
-db = client.whatsdoc
-customers = db.customers
+try:
+    client = AsyncIOMotorClient(MONGO_URI)
+    db = client.whatsdoc
+    customers = db.customers
+except Exception as e:
+    logger.error(f"❌ Failed to initialize Mongo Client: {e}")
+    raise e
 
 # --- MODELS ---
 class CustomerCreate(BaseModel):
@@ -69,13 +81,13 @@ async def background_send_workflow(request_id: str, phone: str, name: str, video
     3. Updates Status in MongoDB.
     """
     try:
-        print(f"[{request_id}] ⏳ Workflow started. Simulating delay...")
+        logger.info(f"[{request_id}] ⏳ Workflow started. Simulating delay...")
         
         # 1. Human Delay
         delay = random.randint(5, 15)
         await asyncio.sleep(delay)
         
-        print(f"[{request_id}] 🚀 Sending to WAHA now...")
+        logger.info(f"[{request_id}] 🚀 Sending to WAHA now...")
 
         # 2. Prepare WAHA Payload
         chat_id = format_phone_to_chat_id(phone)
@@ -103,26 +115,30 @@ async def background_send_workflow(request_id: str, phone: str, name: str, video
             response = await http_client.post(f"{WAHA_API_URL}/api/sendFile", json=payload, headers=headers)
             
             if response.status_code in [200, 201]:
-                print(f"[{request_id}] ✅ WAHA Success: {response.json()}")
+                logger.info(f"[{request_id}] ✅ WAHA Success: {response.json()}")
                 await customers.update_one(
                     {"_id": ObjectId(request_id)},
                     {"$set": {"status": "completed", "completedAt": datetime.utcnow().isoformat()}}
                 )
             else:
-                print(f"[{request_id}] ❌ WAHA Error ({response.status_code}): {response.text}")
+                logger.error(f"[{request_id}] ❌ WAHA Error ({response.status_code}): {response.text}")
                 await customers.update_one(
                     {"_id": ObjectId(request_id)},
                     {"$set": {"status": "failed", "error": response.text}}
                 )
 
     except Exception as e:
-        print(f"[{request_id}] 💥 Exception: {str(e)}")
+        logger.error(f"[{request_id}] 💥 Exception: {str(e)}")
         await customers.update_one(
             {"_id": ObjectId(request_id)},
             {"$set": {"status": "failed", "error": str(e)}}
         )
 
 # --- ROUTES ---
+
+@app.get("/")
+def read_root():
+    return {"status": "WhatsDoc Backend Running"}
 
 @app.post("/api/register-customer")
 async def register_customer(request: CustomerCreate):
