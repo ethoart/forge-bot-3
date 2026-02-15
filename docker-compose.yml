@@ -10,20 +10,25 @@ volumes:
 
 services:
   # BACKEND (Python FastAPI)
-  # Handles DB logic and WhatsApp Sending
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.txt
     restart: always
     container_name: backend
     environment:
-      - MONGO_URI=mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017
-      - WAHA_API_URL=http://waha:3000
+      - MONGO_USER=${MONGO_USER}
+      - MONGO_PASS=${MONGO_PASS}
       - WAHA_API_KEY=${WAHA_API_KEY}
+    depends_on:
+      - mongo
+      - waha
+    ports:
+      - "8000:8000"
     networks:
       - app_net
 
-  # FRONTEND & PROXY (Nginx)
-  # Acts as the single entry point
+  # FRONTEND (Nginx)
   nginx:
     build: 
       context: .
@@ -34,7 +39,6 @@ services:
       - "80:80"
     depends_on:
       - backend
-      - waha
     networks:
       - app_net
 

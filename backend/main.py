@@ -1,9 +1,10 @@
 import os
-import base64
 import asyncio
 import random
+import base64
 from datetime import datetime
-from typing import List, Optional
+from typing import List
+
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -11,15 +12,19 @@ from pydantic import BaseModel
 from bson import ObjectId
 import httpx
 
+app = FastAPI()
+
 # --- CONFIG ---
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://mongo:27017")
-WAHA_API_URL = os.getenv("WAHA_API_URL", "http://waha:3000")
+# Connection string for Docker: mongo service on port 27017
+MONGO_USER = os.getenv("MONGO_USER", "admin")
+MONGO_PASS = os.getenv("MONGO_PASS", "secret123")
+MONGO_URI = f"mongodb://{MONGO_USER}:{MONGO_PASS}@mongo:27017"
+
+WAHA_API_URL = "http://waha:3000"
 WAHA_API_KEY = os.getenv("WAHA_API_KEY", "secret123")
 WAHA_SESSION = os.getenv("WAHA_WORKER_ID", "default")
 
-app = FastAPI()
-
-# CORS
+# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -56,72 +61,68 @@ def format_phone_to_chat_id(phone: str) -> str:
     clean_number = "".join(filter(str.isdigit, phone))
     return f"{clean_number}@c.us"
 
-async def process_upload_workflow(request_id: str, phone: str, name: str, video_name: str, file_content: bytes, mime_type: str, filename: str):
+async def background_send_workflow(request_id: str, phone: str, name: str, video_name: str, file_content: bytes, mime_type: str, filename: str):
     """
-    1. Wait Random Time (5-15s)
-    2. Send Message via WAHA
-    3. Update DB
+    Background Task:
+    1. Waits 5-15 seconds (Human simulation).
+    2. Sends document via WAHA.
+    3. Updates Status in MongoDB.
     """
-    print(f"[{request_id}] Workflow started. Simulating human delay...")
-    
-    # 1. Human Delay
-    delay = random.randint(5, 15)
-    await asyncio.sleep(delay)
-    
-    print(f"[{request_id}] Delay finished. Sending to WAHA...")
+    try:
+        print(f"[{request_id}] ⏳ Workflow started. Simulating delay...")
+        
+        # 1. Human Delay
+        delay = random.randint(5, 15)
+        await asyncio.sleep(delay)
+        
+        print(f"[{request_id}] 🚀 Sending to WAHA now...")
 
-    # 2. Prepare Payload
-    chat_id = format_phone_to_chat_id(phone)
-    
-    # Encode file to Base64
-    b64_data = base64.b64encode(file_content).decode('utf-8')
-    data_uri = f"data:{mime_type};base64,{b64_data}"
+        # 2. Prepare WAHA Payload
+        chat_id = format_phone_to_chat_id(phone)
+        b64_data = base64.b64encode(file_content).decode('utf-8')
+        data_uri = f"data:{mime_type};base64,{b64_data}"
 
-    payload = {
-        "chatId": chat_id,
-        "caption": f"Hi {name}! Here is the document you requested: {video_name}.\n\nThanks for visiting us!",
-        "session": WAHA_SESSION,
-        "file": {
-            "mimetype": mime_type,
-            "filename": filename,
-            "data": data_uri
+        payload = {
+            "chatId": chat_id,
+            "caption": f"Hi {name}! Here is the document you requested: {video_name}.\n\nThanks for visiting us!",
+            "session": WAHA_SESSION,
+            "file": {
+                "mimetype": mime_type,
+                "filename": filename,
+                "data": data_uri
+            }
         }
-    }
 
-    headers = {
-        "Content-Type": "application/json",
-        "X-Api-Key": WAHA_API_KEY
-    }
+        headers = {
+            "Content-Type": "application/json",
+            "X-Api-Key": WAHA_API_KEY
+        }
 
-    # 3. Send to WAHA
-    async with httpx.AsyncClient(timeout=60.0) as http_client:
-        try:
-            # Check if session is 'WORKING' first (Optional, but good practice)
-            # session_check = await http_client.get(f"{WAHA_API_URL}/api/sessions/{WAHA_SESSION}", headers=headers)
-            
+        # 3. Send Request
+        async with httpx.AsyncClient(timeout=60.0) as http_client:
             response = await http_client.post(f"{WAHA_API_URL}/api/sendFile", json=payload, headers=headers)
             
-            if response.status_code == 201 or response.status_code == 200:
-                print(f"[{request_id}] WAHA Success: {response.json()}")
+            if response.status_code in [200, 201]:
+                print(f"[{request_id}] ✅ WAHA Success: {response.json()}")
                 await customers.update_one(
                     {"_id": ObjectId(request_id)},
                     {"$set": {"status": "completed", "completedAt": datetime.utcnow().isoformat()}}
                 )
             else:
-                print(f"[{request_id}] WAHA Error ({response.status_code}): {response.text}")
+                print(f"[{request_id}] ❌ WAHA Error ({response.status_code}): {response.text}")
                 await customers.update_one(
                     {"_id": ObjectId(request_id)},
                     {"$set": {"status": "failed", "error": response.text}}
                 )
 
-        except Exception as e:
-            print(f"[{request_id}] Network/Exception Error: {str(e)}")
-            await customers.update_one(
-                {"_id": ObjectId(request_id)},
-                {"$set": {"status": "failed", "error": str(e)}}
-            )
+    except Exception as e:
+        print(f"[{request_id}] 💥 Exception: {str(e)}")
+        await customers.update_one(
+            {"_id": ObjectId(request_id)},
+            {"$set": {"status": "failed", "error": str(e)}}
+        )
 
-# --- ENDPOINTS ---
+# --- ROUTES ---
 
 @app.post("/api/register-customer")
 async def register_customer(request: CustomerCreate):
@@ -137,6 +138,7 @@ async def register_customer(request: CustomerCreate):
 
 @app.get("/api/get-pending")
 async def get_pending():
+    # Get oldest pending first
     pending_docs = await customers.find({"status": "pending"}).sort("requestedAt", 1).limit(100).to_list(length=100)
     return [pydantic_encoder(doc) for doc in pending_docs]
 
@@ -148,25 +150,25 @@ async def upload_document(
     phoneNumber: str = Form(...),
     videoName: str = Form(...)
 ):
-    # 1. Read file content into memory
-    content = await file.read()
-    
-    # 2. Verify Request Exists
+    # 1. Validate ID
     try:
         req_oid = ObjectId(requestId)
     except:
         raise HTTPException(status_code=400, detail="Invalid ID")
 
+    # 2. Read File
+    content = await file.read()
+    
+    # 3. Find Customer Name (Optional, for personalization)
     customer = await customers.find_one({"_id": req_oid})
-    if not customer:
-        raise HTTPException(status_code=404, detail="Customer request not found")
+    customer_name = customer['customerName'] if customer else "Customer"
 
-    # 3. Add to Background Tasks
+    # 4. Trigger Background Task
     background_tasks.add_task(
-        process_upload_workflow,
+        background_send_workflow,
         requestId,
         phoneNumber,
-        customer['customerName'],
+        customer_name,
         videoName,
         content,
         file.content_type,
