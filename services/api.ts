@@ -8,7 +8,7 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Registers a new customer request.
- * POST /api/register-customer -> N8N Webhook
+ * POST /api/register-customer
  */
 export const registerCustomer = async (
   name: string,
@@ -40,7 +40,7 @@ export const registerCustomer = async (
 
 /**
  * Fetches the list of pending requests.
- * GET /api/get-pending -> N8N Webhook
+ * GET /api/get-pending
  */
 export const getPendingRequests = async (): Promise<CustomerRequest[]> => {
   if (APP_CONFIG.useMockMode) {
@@ -65,7 +65,7 @@ export const getPendingRequests = async (): Promise<CustomerRequest[]> => {
 
 /**
  * Uploads a file for a specific customer.
- * POST /api/upload-document -> N8N Webhook
+ * POST /api/upload-document
  */
 export const uploadDocument = async (
   requestId: string,
@@ -76,10 +76,7 @@ export const uploadDocument = async (
     return true;
   } else {
     const formData = new FormData();
-    // N8N 'Webhook' node with Binary Data enabled expects the field 'file' by default (or configured name)
     formData.append('file', file);
-    
-    // N8N will parse these from the body
     formData.append('requestId', requestId);
     formData.append('phoneNumber', phoneNumber);
     formData.append('videoName', file.name);
@@ -89,9 +86,16 @@ export const uploadDocument = async (
         method: 'POST',
         body: formData, 
       });
-      return response.ok;
+      
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error(`Upload Failed (${response.status}):`, errText);
+        return false;
+      }
+
+      return true;
     } catch (error) {
-      console.error("API Error", error);
+      console.error("Upload Network Error", error);
       return false;
     }
   }

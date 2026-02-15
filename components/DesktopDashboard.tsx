@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { UploadCloud, Clock, CheckCircle, RefreshCw, FileVideo, AlertCircle, Loader2, Search, ArrowLeft, Filter, Layers } from 'lucide-react';
+import { UploadCloud, Clock, CheckCircle, RefreshCw, FileVideo, Loader2, Search, ArrowLeft, Filter, Layers, AlertTriangle } from 'lucide-react';
 import { CustomerRequest } from '../types';
 import { getPendingRequests, uploadDocument } from '../services/api';
 import { formatDistanceToNow } from 'date-fns';
@@ -12,8 +12,8 @@ const DesktopDashboard: React.FC = () => {
   
   // Batch Upload States
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
-  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, successes: 0, skipped: 0 });
-  const [lastBatchReport, setLastBatchReport] = useState<string | null>(null);
+  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, successes: 0, failed: 0, unmatched: 0 });
+  const [lastBatchReport, setLastBatchReport] = useState<{ message: string, type: 'success' | 'warning' } | null>(null);
 
   const [motivation, setMotivation] = useState(MOTIVATIONAL_QUOTES[0]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -34,6 +34,9 @@ const DesktopDashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, [fetchData]);
 
+  // Helper: Fuzzy match string (removes special chars, spaces, and lowercase)
+  const normalize = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -46,7 +49,8 @@ const DesktopDashboard: React.FC = () => {
       current: 0,
       total: fileList.length,
       successes: 0,
-      skipped: 0
+      failed: 0,
+      unmatched: 0
     });
 
     // We maintain a set of Request IDs used in this batch to prevent 
@@ -54,25 +58,28 @@ const DesktopDashboard: React.FC = () => {
     const usedRequestIds = new Set<string>();
     
     let successes = 0;
-    let skipped = 0;
+    let failed = 0;
+    let unmatched = 0;
 
     // SEQUENTIAL UPLOAD LOOP
-    // We await each upload to protect the AWS T3 Small server from crashing due to 100 concurrent connections.
     for (let i = 0; i < fileList.length; i++) {
       const file = fileList[i];
       setBatchProgress(prev => ({ ...prev, current: i + 1 }));
 
       const rawFileName = file.name;
       const nameWithoutExt = rawFileName.substring(0, rawFileName.lastIndexOf('.')) || rawFileName;
+      const normFileName = normalize(nameWithoutExt);
 
       // Find the OLDEST pending request that matches this filename
-      // and hasn't been fulfilled by a previous file in this specific batch.
-      const match = requests.find(r => 
-        !usedRequestIds.has(r.id) &&
-        r.status === 'pending' && 
-        (nameWithoutExt.toLowerCase().includes(r.videoName.toLowerCase()) || 
-         r.videoName.toLowerCase() === nameWithoutExt.toLowerCase())
-      );
+      const match = requests.find(r => {
+        if (usedRequestIds.has(r.id) || r.status !== 'pending') return false;
+        
+        const normVideoName = normalize(r.videoName);
+        
+        // Match if one contains the other (e.g. "video1" matches "video1_final")
+        // Or exact match of normalized strings
+        return normFileName.includes(normVideoName) || normVideoName.includes(normFileName);
+      });
 
       if (match) {
         usedRequestIds.add(match.id);
@@ -82,17 +89,20 @@ const DesktopDashboard: React.FC = () => {
           successes++;
           setBatchProgress(prev => ({ ...prev, successes: prev.successes + 1 }));
         } else {
-          skipped++; // API failure count as skipped for now
-          setBatchProgress(prev => ({ ...prev, skipped: prev.skipped + 1 }));
+          failed++; 
+          setBatchProgress(prev => ({ ...prev, failed: prev.failed + 1 }));
         }
       } else {
-        skipped++;
-        setBatchProgress(prev => ({ ...prev, skipped: prev.skipped + 1 }));
+        unmatched++;
+        setBatchProgress(prev => ({ ...prev, unmatched: prev.unmatched + 1 }));
       }
     }
 
     // Batch Complete
-    setLastBatchReport(`Batch Done: Sent ${successes} videos. Skipped ${skipped} (no match).`);
+    const message = `Sent: ${successes} | Unmatched: ${unmatched} | Failed: ${failed}`;
+    const type = (failed > 0 || unmatched > 0) ? 'warning' : 'success';
+    
+    setLastBatchReport({ message, type });
     setIsProcessingBatch(false);
     setMotivation(MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)]);
     
@@ -103,11 +113,11 @@ const DesktopDashboard: React.FC = () => {
     // Reset input
     e.target.value = '';
     
-    // Clear report after 6 seconds
+    // Clear report after 10 seconds
     setTimeout(() => {
       setLastBatchReport(null);
-      setBatchProgress({ current: 0, total: 0, successes: 0, skipped: 0 });
-    }, 6000);
+      setBatchProgress({ current: 0, total: 0, successes: 0, failed: 0, unmatched: 0 });
+    }, 10000);
   };
 
   const filteredRequests = requests.filter(r => 
@@ -237,11 +247,17 @@ const DesktopDashboard: React.FC = () => {
                     </div>
                   ) : lastBatchReport ? (
                     <div className="flex flex-col items-center animate-in fade-in zoom-in-95 duration-300">
-                       <div className="bg-green-50 p-6 rounded-full mb-4">
-                         <CheckCircle className="w-12 h-12 text-green-500" />
+                       <div className={`p-6 rounded-full mb-4 ${lastBatchReport.type === 'success' ? 'bg-green-50' : 'bg-orange-50'}`}>
+                         {lastBatchReport.type === 'success' ? (
+                           <CheckCircle className="w-12 h-12 text-green-500" />
+                         ) : (
+                           <AlertTriangle className="w-12 h-12 text-orange-500" />
+                         )}
                        </div>
-                       <h3 className="text-xl font-bold text-slate-800 mb-2">{lastBatchReport}</h3>
-                       <p className="text-slate-400 text-sm">Ready for next batch</p>
+                       <h3 className="text-xl font-bold text-slate-800 mb-2">{lastBatchReport.message}</h3>
+                       <p className="text-slate-400 text-sm">
+                         {lastBatchReport.type === 'success' ? 'All good!' : 'Check filenames and try again.'}
+                       </p>
                     </div>
                   ) : (
                     <>
@@ -252,7 +268,7 @@ const DesktopDashboard: React.FC = () => {
                       <h3 className="text-2xl font-bold text-slate-800 mb-2">Drag & Drop Videos</h3>
                       <p className="text-slate-500 text-sm max-w-sm text-center px-4 leading-relaxed">
                         <span className="font-semibold text-blue-600">Bulk Upload Supported</span>. 
-                        Files are automatically matched to the oldest pending customer by name.
+                        Files match automatically (e.g. "video1.mp4" → "Video 1").
                       </p>
                     </>
                   )}
