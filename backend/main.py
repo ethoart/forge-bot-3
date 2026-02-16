@@ -84,9 +84,23 @@ def pydantic_encoder(item):
     }
 
 def format_phone_to_chat_id(phone: str) -> str:
+    """
+    Cleans phone number for WhatsApp.
+    Expected: International format without + (e.g., 447700900900)
+    """
+    # 1. Remove all non-digits
     clean_number = "".join(filter(str.isdigit, phone))
+    
+    # 2. Remove leading '00' (common international prefix)
     if clean_number.startswith("00"):
         clean_number = clean_number[2:]
+        
+    # 3. Validation
+    if not clean_number:
+        raise ValueError("Phone number is empty")
+    if len(clean_number) < 7:
+        raise ValueError(f"Phone number too short ({clean_number}). Missing Country Code?")
+
     return f"{clean_number}@c.us"
 
 async def is_waha_ready():
@@ -144,7 +158,16 @@ async def send_file_logic(request_id: str, phone: str, name: str, video_name: st
         with open(file_path, "rb") as f:
             file_content = f.read()
 
-        chat_id = format_phone_to_chat_id(phone)
+        try:
+            chat_id = format_phone_to_chat_id(phone)
+        except ValueError as ve:
+            logger.error(f"[{request_id}] ❌ Invalid Phone: {ve}")
+            await customers.update_one(
+                {"_id": ObjectId(request_id)},
+                {"$set": {"status": "failed", "error": f"Invalid Phone: {ve}"}}
+            )
+            return
+
         b64_data = base64.b64encode(file_content).decode('utf-8')
         data_uri = f"data:{mime_type};base64,{b64_data}"
 
@@ -180,11 +203,18 @@ async def send_file_logic(request_id: str, phone: str, name: str, video_name: st
                 except Exception as e:
                     logger.warning(f"Failed to delete file {file_path}: {e}")
             else:
-                error_msg = response.text[:200]
-                logger.error(f"[{request_id}] ❌ WAHA Rejected: {error_msg}")
+                # TRY TO READ ERROR DETAILS
+                try:
+                    error_json = response.json()
+                    error_detail = error_json.get("detail") or error_json.get("error") or str(error_json)
+                except:
+                    error_detail = response.text[:200]
+
+                logger.error(f"[{request_id}] ❌ WAHA Rejected ({response.status_code}): {error_detail}")
+                
                 await customers.update_one(
                     {"_id": ObjectId(request_id)},
-                    {"$set": {"status": "failed", "error": f"WAHA {response.status_code}: {error_msg}"}}
+                    {"$set": {"status": "failed", "error": f"WAHA {response.status_code}: {error_detail}"}}
                 )
 
     except Exception as e:
