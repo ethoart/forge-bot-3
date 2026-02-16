@@ -7,8 +7,10 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel
 from bson import ObjectId
@@ -19,6 +21,23 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# --- EXCEPTION HANDLERS ---
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """
+    Logs detailed 422 validation errors to help debugging.
+    """
+    logger.error(f"❌ Validation Error: {exc}")
+    try:
+        body = await request.body()
+        logger.error(f"❌ Request Body: {body.decode('utf-8', errors='ignore')}")
+    except:
+        pass
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "message": "Validation Error. Check Docker logs."},
+    )
 
 # --- CONFIG ---
 MONGO_USER = os.getenv("MONGO_USER", "admin")
@@ -62,7 +81,8 @@ try:
     customers = db.customers
 except Exception as e:
     logger.error(f"❌ Failed to initialize Mongo Client: {e}")
-    raise e
+    # Don't raise here to allow app to start and show logs, but APIs will fail
+    pass
 
 # --- MODELS ---
 class CustomerCreate(BaseModel):
@@ -333,15 +353,16 @@ async def retry_file(background_tasks: BackgroundTasks, filename: str = Form(...
 @app.post("/api/upload-document")
 async def upload_document(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    # NOTE: Moved file to the END of parameters to prevent parsing issues
     requestId: str = Form(...),
     phoneNumber: str = Form(...),
-    videoName: str = Form(...)
+    videoName: str = Form(...),
+    file: UploadFile = File(...),
 ):
     try:
         ObjectId(requestId)
     except:
-        raise HTTPException(status_code=400, detail="Invalid ID")
+        raise HTTPException(status_code=400, detail="Invalid ID format")
 
     # SAVE TO DISK FIRST
     file_location = os.path.join(UPLOAD_DIR, file.filename)

@@ -69,11 +69,18 @@ export const uploadDocument = async (
   phoneNumber: string
 ): Promise<boolean> => {
   if (APP_CONFIG.useMockMode) return true;
+
+  if (!requestId || !file || !phoneNumber) {
+    console.error("Upload aborted: Missing required fields.", { requestId, phoneNumber, fileName: file?.name });
+    return false;
+  }
+
   const formData = new FormData();
-  formData.append('file', file);
+  // Order matters for some parsers: Simple fields first, File last.
   formData.append('requestId', requestId);
   formData.append('phoneNumber', phoneNumber);
   formData.append('videoName', file.name);
+  formData.append('file', file);
 
   try {
     const response = await fetch(`${APP_CONFIG.apiBaseUrl}/upload-document`, {
