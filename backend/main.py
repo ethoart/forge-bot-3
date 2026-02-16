@@ -27,8 +27,17 @@ MONGO_URI = f"mongodb://{MONGO_USER}:{MONGO_PASS}@mongo:27017"
 UPLOAD_DIR = "uploads"
 
 WAHA_API_URL = "http://waha:3000"
-WAHA_API_KEY = os.getenv("WAHA_API_KEY", "secret123")
 WAHA_SESSION = os.getenv("WAHA_WORKER_ID", "default")
+
+# --- API KEY SECURITY CHECK ---
+_raw_key = os.getenv("WAHA_API_KEY", "secret123").strip()
+if _raw_key.startswith("sha512:"):
+    logger.warning("⚠️ CRITICAL: It looks like you put a SHA512 hash in WAHA_API_KEY.")
+    logger.warning("⚠️ The system requires the PLAIN TEXT password.")
+    logger.warning("⚠️ Falling back to default: 'secret123'")
+    WAHA_API_KEY = "secret123"
+else:
+    WAHA_API_KEY = _raw_key
 
 # Create Upload Directory
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -36,6 +45,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 logger.info("🚀 Starting Backend...")
 logger.info(f"📂 Storage Directory: {os.path.abspath(UPLOAD_DIR)}")
 logger.info(f"🔌 Connecting to Mongo at: mongo:27017")
+logger.info(f"🔑 WAHA API Key Configured: {WAHA_API_KEY[:3]}***")
 
 # --- CORS ---
 app.add_middleware(
@@ -81,15 +91,27 @@ def format_phone_to_chat_id(phone: str) -> str:
 
 async def is_waha_ready():
     """Checks if the configured WAHA session is in WORKING state"""
+    headers = {
+        "X-Api-Key": WAHA_API_KEY,
+        "Content-Type": "application/json"
+    }
     try:
-        async with httpx.AsyncClient(timeout=3.0) as http_client:
+        async with httpx.AsyncClient(timeout=5.0) as http_client:
             url = f"{WAHA_API_URL}/api/sessions/{WAHA_SESSION}"
-            resp = await http_client.get(url)
+            # IMPORTANT: Must include headers for authentication
+            resp = await http_client.get(url, headers=headers)
+            
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("status") == "WORKING":
                     return True, "Ready"
                 return False, f"Session status is {data.get('status')}"
+            elif resp.status_code == 401:
+                logger.critical("🚨 WAHA AUTH FAILED (401)")
+                logger.critical("🚨 SOLUTION: Run 'bash reset_waha.sh' on your server to fix the password.")
+                return False, f"WAHA Auth Failed. Run 'bash reset_waha.sh'."
+            elif resp.status_code == 404:
+                 return False, f"Session '{WAHA_SESSION}' not found. Please scan QR."
             return False, f"WAHA Error: {resp.status_code}"
     except Exception as e:
         return False, f"Connection Error: {str(e)}"
@@ -137,7 +159,10 @@ async def send_file_logic(request_id: str, phone: str, name: str, video_name: st
             }
         }
 
-        headers = {"Content-Type": "application/json", "X-Api-Key": WAHA_API_KEY}
+        headers = {
+            "Content-Type": "application/json", 
+            "X-Api-Key": WAHA_API_KEY
+        }
 
         # 3. Send
         async with httpx.AsyncClient(timeout=180.0) as http_client:
@@ -161,7 +186,6 @@ async def send_file_logic(request_id: str, phone: str, name: str, video_name: st
                     {"_id": ObjectId(request_id)},
                     {"$set": {"status": "failed", "error": f"WAHA {response.status_code}: {error_msg}"}}
                 )
-                # NOTE: We do NOT delete on failure, so user can retry from Storage tab.
 
     except Exception as e:
         logger.error(f"[{request_id}] 💥 Exception: {str(e)}")
@@ -234,23 +258,19 @@ def delete_server_file(filename: str):
 async def retry_file(background_tasks: BackgroundTasks, filename: str = Form(...)):
     """
     Manually trigger a send for a file sitting on the server.
-    It looks up a matching customer record (pending or failed) to get the phone number.
     """
     filepath = os.path.join(UPLOAD_DIR, filename)
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="File not found on server")
 
     # Try to find a matching customer request
-    # We look for partial match on videoName
-    # e.g. File "video123.mp4", DB videoName "video123"
-    
-    # 1. Exact match attempt (if file is "video.mp4", db says "video.mp4")
+    # 1. Exact match attempt
     customer = await customers.find_one({
         "videoName": filename, 
         "status": {"$in": ["pending", "failed"]}
     })
     
-    # 2. Loose match (if file is "video.mp4", db says "video")
+    # 2. Loose match
     if not customer:
         name_no_ext = os.path.splitext(filename)[0]
         customer = await customers.find_one({
@@ -308,32 +328,11 @@ async def upload_document(
         send_file_logic,
         requestId,
         phoneNumber,
-        # Fetch fresh name from DB just in case, or use form data
-        "Customer", # We can optimize this later
+        "Customer", # Will be updated by dashboard later if needed
         videoName,
         file_location,
         file.filename,
         file.content_type
     )
-
-    # Note: We update "Customer" name inside the task logic ideally, 
-    # but for now we pass the logic. To keep it simple, we query inside task or pass form data.
-    # Let's verify name query in task.
-    # Actually, let's update send_file_logic signature to take name, 
-    # but since we already have the ID, we could query it. 
-    # For now, let's just fetch the name inside the background task for accuracy? 
-    # Or just pass it. The previous code queried it. 
-    # Let's fix the logic flow in `send_file_logic` to be self-contained?
-    # No, to match previous signature, let's find the name here quickly.
-    
-    customer = await customers.find_one({"_id": ObjectId(requestId)})
-    real_name = customer['customerName'] if customer else "Customer"
-    
-    # Re-queue with real name
-    # (Cancel previous add_task above, overwriting logic here)
-    # Actually, I can just use the variables.
-    
-    # Correction: background_tasks was already added above. 
-    # Let's clean that up.
     
     return {"success": True, "message": "Saved to disk & queued"}

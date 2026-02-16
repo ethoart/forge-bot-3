@@ -19,7 +19,7 @@ services:
     environment:
       - MONGO_USER=${MONGO_USER}
       - MONGO_PASS=${MONGO_PASS}
-      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_API_KEY=${WAHA_API_KEY:-secret123}
     depends_on:
       - mongo
       - waha
@@ -54,8 +54,8 @@ services:
       - WAHA_NO_FILES=true
       - WAHA_WORKER_ID=default
       - WAHA_DASHBOARD_USERNAME=admin
-      - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASS}
-      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASS:-secret123}
+      - WAHA_API_KEY=${WAHA_API_KEY:-secret123}
       - WAHA_HTTP_MAX_BODY_SIZE=100mb
     volumes:
       - waha_data:/app/.waha
