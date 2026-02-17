@@ -1,51 +1,53 @@
-# 🚀 A-Z Guide: WhatsApp Document Platform (Python Version)
+# 🚀 n8n Powered WhatsApp Platform
 
-**Architecture:**
-*   **Backend**: Python FastAPI (Handles DB & WhatsApp logic).
-*   **Frontend**: React (Served via Nginx).
-*   **Database**: MongoDB (Local Docker).
-*   **WhatsApp**: WAHA (Local Docker).
+This version uses **n8n** as the backend logic engine, eliminating Python server issues.
 
 ---
 
-## 🟢 Step 1: Deploy to Server
+## 🟢 Step 1: Deploy
 
-1.  **Pull Changes**:
-    Copy all files (including the new `backend` folder) to your server.
+```bash
+docker-compose down
+# Remove old backend logic
+docker-compose rm backend
+# Start new stack
+docker-compose up -d --build
+```
 
-2.  **Rebuild Containers**:
-    This will build the new Python backend and the updated React frontend.
-    ```bash
-    # Stop existing containers
-    docker-compose down
-
-    # Build and start new stack
-    docker-compose up -d --build
-    ```
-
-3.  **Verify Status**:
-    ```bash
-    docker-compose ps
-    ```
-    You should see `backend`, `nginx_frontend`, `mongo`, and `waha` all running.
+You should see `n8n`, `waha`, `mongo`, and `nginx_frontend` running.
 
 ---
 
-## 🔵 Step 2: Configure WhatsApp (WAHA)
+## 🔵 Step 2: Configure n8n
 
-1.  Go to `http://<your-server-ip>:3000/dashboard` (or your domain).
+1.  Open **http://<your-server-ip>:5678**.
+2.  Set up your owner account (email/pass).
+3.  **Import Workflow**:
+    *   Click "Workflows" -> "Add Workflow".
+    *   Click the three dots (top right) -> "Import from File".
+    *   Upload `n8n_workflow.json` (from your project folder).
+4.  **Configure Credentials** (Inside n8n):
+    *   Open the **Mongo Insert** node.
+    *   Create New Credential "MongoDb".
+    *   Connection String: `mongodb://admin:secret123@mongo:27017`
+    *   Save.
+    *   Ensure ALL Mongo nodes use this credential.
+5.  **Activate Workflow**:
+    *   Click "Activate" (Toggle switch at top right).
+
+---
+
+## 🟠 Step 3: Configure WAHA
+
+1.  Open **http://<your-server-ip>:3000/dashboard**.
 2.  Login: `admin` / `secret123`.
-3.  **Scan the QR Code** with your WhatsApp mobile app.
-4.  Once it says "Active", you are ready.
+3.  Scan QR Code for the **default** session.
 
 ---
 
-## 🟠 Step 3: Usage
+## 🟣 Done!
 
-*   **Mobile Registration**: Open your app (e.g., `https://your-domain.com/register`).
-*   **Dashboard**: Open `https://your-domain.com/admin`.
+*   **App**: `http://<your-server-ip>/register`
+*   **Admin**: `http://<your-server-ip>/admin`
 
-**Troubleshooting:**
-*   **Upload Fails?** Check server logs: `docker logs backend`.
-*   **502 Bad Gateway?** The Python server might be restarting. Wait 30 seconds.
-*   **WhatsApp not sending?** Ensure WAHA session is "Active" in the dashboard.
+All logic is now handled visually in n8n.

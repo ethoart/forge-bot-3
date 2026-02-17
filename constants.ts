@@ -1,19 +1,8 @@
 import { N8nConfig } from './types';
 
-// CONFIGURATION
-// ------------------------------------------------------------------
-// ARCHITECTURE (PYTHON POWERED):
-// Frontend (Nginx) -> Proxy /api/* -> Python Backend (FastAPI)
-// Backend -> Mongo / WAHA
-// ------------------------------------------------------------------
-
 export const APP_CONFIG: N8nConfig = {
   useMockMode: false, 
-  
-  // Nginx proxies '/api' to backend
   apiBaseUrl: "/api",
-
-  // Legacy field, points to same place
   n8nWebhookUrl: "/api", 
 };
 

@@ -9,22 +9,25 @@ volumes:
   waha_data:
 
 services:
-  # BACKEND (Python FastAPI)
+  # BACKEND (Node.js - Lightweight)
   backend:
-    build:
+    build: 
       context: ./backend
-      dockerfile: Dockerfile.txt
+      dockerfile: Dockerfile
     restart: always
     container_name: backend
     environment:
-      - MONGO_USER=${MONGO_USER}
-      - MONGO_PASS=${MONGO_PASS}
+      - MONGO_URI=mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017
+      - WAHA_API_URL=http://waha:3000
       - WAHA_API_KEY=${WAHA_API_KEY:-secret123}
-    depends_on:
-      - mongo
-      - waha
+      - WAHA_WORKER_ID=default
+      - PORT=8000
+    volumes:
+      - ./backend/uploads:/app/uploads
     ports:
       - "8000:8000"
+    depends_on:
+      - mongo
     networks:
       - app_net
 
@@ -42,14 +45,13 @@ services:
     networks:
       - app_net
 
-  # WHATSAPP API
+  # WHATSAPP API (Using Light Mode: NOWEB)
   waha:
     image: devlikeapro/waha:latest
     restart: always
     container_name: waha
-    shm_size: '2gb' # IMPORTANT for large media handling
+    shm_size: '2gb'
     environment:
-      # Switch to NOWEB engine to support file sending in Free version
       - WHATSAPP_DEFAULT_ENGINE=NOWEB
       - WAHA_PRINT_QR=true
       - WAHA_NO_FILES=true
